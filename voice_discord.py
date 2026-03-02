@@ -1,9 +1,6 @@
 """
-음성 → Discord 자동 전송 앱 (Whisper 버전)
-작은 도크 윈도우 형태
-
-필요 라이브러리:
-    pip install openai-whisper pyaudio requests torch
+음성 → Discord 자동 전송 앱 (Whisper + sounddevice 버전)
+작은 도크 윈도우 형태 — ffmpeg 불필요!
 """
 
 import tkinter as tk
@@ -14,9 +11,16 @@ import time
 import json
 import os
 import tempfile
-import wave
-import struct
 import requests
+import numpy as np
+import soundfile as sf
+
+try:
+    import sounddevice as sd
+except ImportError:
+    import sys, subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "sounddevice"])
+    import sounddevice as sd
 
 try:
     import whisper
@@ -25,34 +29,23 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "openai-whisper"])
     import whisper
 
-try:
-    import pyaudio
-except ImportError:
-    import sys, subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyaudio"])
-    import pyaudio
-
 # ── 색상 ──
-BG        = "#070b14"
-BG2       = "#0e1420"
-BG3       = "#151d2e"
-DISCORD   = "#5865F2"
-GREEN     = "#00e5a0"
-RED       = "#ff6b35"
-TEXT      = "#dde6f5"
-TEXT_DIM  = "#4a6080"
-YELLOW    = "#fbbf24"
+BG       = "#070b14"
+BG2      = "#0e1420"
+BG3      = "#151d2e"
+DISCORD  = "#5865F2"
+GREEN    = "#00e5a0"
+RED      = "#ff6b35"
+TEXT     = "#dde6f5"
+TEXT_DIM = "#4a6080"
+YELLOW   = "#fbbf24"
 
 COLORS = ["#00c2ff","#ff6b35","#00e5a0","#ff6b9d","#c4b5fd","#fbbf24","#34d399","#f87171"]
 STORAGE_FILE = os.path.join(os.path.expanduser("~"), ".voice_discord_settings.json")
 
-# 오디오 설정
-RATE       = 16000
-CHANNELS   = 1
-CHUNK      = 1024
-FORMAT     = pyaudio.paInt16
-SILENCE_THRESHOLD = 500   # 묵음 감지 임계값
-SILENCE_SECONDS   = 1.2   # 이 시간 동안 묵음이면 인식 시작
+RATE             = 16000
+SILENCE_THRESH   = 0.01   # 묵음 감지 (0~1 사이 RMS)
+SILENCE_SECONDS  = 1.2
 
 
 def load_settings():
@@ -78,14 +71,6 @@ def name_to_color(name):
     return COLORS[h]
 
 
-def rms(data):
-    """오디오 청크의 음량 계산"""
-    count = len(data) // 2
-    shorts = struct.unpack("%dh" % count, data)
-    sum_squares = sum(s * s for s in shorts)
-    return (sum_squares / count) ** 0.5 if count else 0
-
-
 class VoiceDiscordApp:
     def __init__(self):
         self.root = tk.Tk()
@@ -99,18 +84,17 @@ class VoiceDiscordApp:
         sh = self.root.winfo_screenheight()
         self.root.geometry(f"{w}x{h}+{sw-w-20}+{sh-h-60}")
 
-        self.is_listening  = False
-        self.auto_send     = True
-        self.model         = None
-        self.model_loaded  = False
-        self.stop_event    = threading.Event()
-        self.result_queue  = queue.Queue()
-        self.messages      = []
-        self.settings      = load_settings()
-        self.webhook_url   = ""
-        self.user_name     = self.settings.get("last_name", "")
-        self.user_color    = name_to_color(self.user_name) if self.user_name else DISCORD
-
+        self.is_listening = False
+        self.auto_send    = True
+        self.model        = None
+        self.model_loaded = False
+        self.stop_event   = threading.Event()
+        self.result_queue = queue.Queue()
+        self.messages     = []
+        self.settings     = load_settings()
+        self.webhook_url  = ""
+        self.user_name    = self.settings.get("last_name", "")
+        self.user_color   = name_to_color(self.user_name) if self.user_name else DISCORD
         self._drag_x = 0
         self._drag_y = 0
 
@@ -125,74 +109,69 @@ class VoiceDiscordApp:
 
         self.root.mainloop()
 
-    # ── UI ──
     def _build_ui(self):
         title_bar = tk.Frame(self.root, bg=DISCORD, height=36)
         title_bar.pack(fill="x")
         title_bar.pack_propagate(False)
         title_bar.bind("<Button-1>", self._drag_start)
         title_bar.bind("<B1-Motion>", self._drag_move)
-
-        tk.Label(title_bar, text="🎤  음성 → Discord (Whisper)",
-                 bg=DISCORD, fg="white",
-                 font=("맑은 고딕", 10, "bold")).pack(side="left", padx=10)
+        tk.Label(title_bar, text="🎤  음성 → Discord",
+                 bg=DISCORD, fg="white", font=("맑은 고딕", 10, "bold")).pack(side="left", padx=10)
         tk.Button(title_bar, text="✕", bg=DISCORD, fg="white",
                   relief="flat", font=("맑은 고딕", 10, "bold"),
-                  cursor="hand2", command=self.root.destroy,
-                  padx=8).pack(side="right")
+                  cursor="hand2", command=self.root.destroy, padx=8).pack(side="right")
 
-        cfg_frame = tk.Frame(self.root, bg=BG2, pady=6, padx=8)
-        cfg_frame.pack(fill="x")
+        cfg = tk.Frame(self.root, bg=BG2, pady=6, padx=8)
+        cfg.pack(fill="x")
 
-        name_row = tk.Frame(cfg_frame, bg=BG2)
+        name_row = tk.Frame(cfg, bg=BG2)
         name_row.pack(fill="x", pady=(0, 4))
         self.avatar_lbl = tk.Label(name_row, text="?", bg=self.user_color,
                                    fg="white", font=("맑은 고딕", 9, "bold"), width=2)
         self.avatar_lbl.pack(side="left", padx=(0, 6))
-        self.name_lbl = tk.Label(name_row,
-                                 text=self.user_name or "이름 미설정",
+        self.name_lbl = tk.Label(name_row, text=self.user_name or "이름 미설정",
                                  bg=BG2, fg=TEXT if self.user_name else TEXT_DIM,
                                  font=("맑은 고딕", 9))
         self.name_lbl.pack(side="left")
-        tk.Button(name_row, text="변경", bg=BG3, fg=TEXT_DIM,
-                  relief="flat", font=("맑은 고딕", 8),
-                  cursor="hand2", command=self._change_name).pack(side="right")
+        tk.Button(name_row, text="변경", bg=BG3, fg=TEXT_DIM, relief="flat",
+                  font=("맑은 고딕", 8), cursor="hand2",
+                  command=self._change_name).pack(side="right")
 
-        hook_row = tk.Frame(cfg_frame, bg=BG2)
+        hook_row = tk.Frame(cfg, bg=BG2)
         hook_row.pack(fill="x")
         self.hook_status = tk.Label(hook_row, text="●", fg=TEXT_DIM, bg=BG2, font=("맑은 고딕", 8))
         self.hook_status.pack(side="left", padx=(0, 4))
         self.hook_lbl = tk.Label(hook_row, text="Webhook 미설정",
                                  bg=BG2, fg=TEXT_DIM, font=("맑은 고딕", 8))
         self.hook_lbl.pack(side="left")
-        hook_btns = tk.Frame(hook_row, bg=BG2)
-        hook_btns.pack(side="right")
-        tk.Button(hook_btns, text="입력", bg=BG3, fg=TEXT_DIM, relief="flat",
+        hb = tk.Frame(hook_row, bg=BG2)
+        hb.pack(side="right")
+        tk.Button(hb, text="입력", bg=BG3, fg=TEXT_DIM, relief="flat",
                   font=("맑은 고딕", 8), cursor="hand2",
                   command=self._input_webhook).pack(side="left", padx=(0, 2))
-        tk.Button(hook_btns, text="저장목록", bg=BG3, fg=TEXT_DIM, relief="flat",
+        tk.Button(hb, text="저장목록", bg=BG3, fg=TEXT_DIM, relief="flat",
                   font=("맑은 고딕", 8), cursor="hand2",
                   command=self._show_saved_webhooks).pack(side="left")
 
-        status_frame = tk.Frame(self.root, bg=BG3, height=24)
-        status_frame.pack(fill="x")
-        status_frame.pack_propagate(False)
-        self.status_dot = tk.Label(status_frame, text="●", fg=YELLOW, bg=BG3, font=("맑은 고딕", 7))
+        sf_bar = tk.Frame(self.root, bg=BG3, height=24)
+        sf_bar.pack(fill="x")
+        sf_bar.pack_propagate(False)
+        self.status_dot = tk.Label(sf_bar, text="●", fg=YELLOW, bg=BG3, font=("맑은 고딕", 7))
         self.status_dot.pack(side="left", padx=(8, 3))
-        self.status_lbl = tk.Label(status_frame, text="Whisper 모델 로딩 중...",
+        self.status_lbl = tk.Label(sf_bar, text="Whisper 모델 로딩 중...",
                                    fg=YELLOW, bg=BG3, font=("맑은 고딕", 8))
         self.status_lbl.pack(side="left")
 
         self.banner = tk.Label(self.root, text="", bg=GREEN, fg="#003322",
                                font=("맑은 고딕", 8, "bold"), pady=3)
 
-        list_frame = tk.Frame(self.root, bg=BG, padx=6, pady=4)
-        list_frame.pack(fill="both", expand=True)
-        self.canvas = tk.Canvas(list_frame, bg=BG, highlightthickness=0)
-        sb = tk.Scrollbar(list_frame, orient="vertical", command=self.canvas.yview,
-                          bg=BG, troughcolor=BG2)
-        self.canvas.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
+        lf = tk.Frame(self.root, bg=BG, padx=6, pady=4)
+        lf.pack(fill="both", expand=True)
+        self.canvas = tk.Canvas(lf, bg=BG, highlightthickness=0)
+        sb2 = tk.Scrollbar(lf, orient="vertical", command=self.canvas.yview,
+                           bg=BG, troughcolor=BG2)
+        self.canvas.configure(yscrollcommand=sb2.set)
+        sb2.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
         self.msg_frame = tk.Frame(self.canvas, bg=BG)
         self.cw = self.canvas.create_window((0, 0), window=self.msg_frame, anchor="nw")
@@ -200,59 +179,51 @@ class VoiceDiscordApp:
             scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfig(self.cw, width=e.width))
 
-        prev_frame = tk.Frame(self.root, bg=BG2, padx=8, pady=5)
-        prev_frame.pack(fill="x")
-        self.preview_lbl = tk.Label(prev_frame,
-                                    text="음성을 인식하면 여기에 표시됩니다...",
+        pf = tk.Frame(self.root, bg=BG2, padx=8, pady=5)
+        pf.pack(fill="x")
+        self.preview_lbl = tk.Label(pf, text="음성을 인식하면 여기에 표시됩니다...",
                                     fg=TEXT_DIM, bg=BG2, font=("맑은 고딕", 8),
                                     wraplength=290, justify="left", anchor="w")
         self.preview_lbl.pack(fill="x")
 
-        ctrl_frame = tk.Frame(self.root, bg=BG, padx=8, pady=8)
-        ctrl_frame.pack(fill="x")
-        self.btn_mic = tk.Button(ctrl_frame, text="🎤  시작",
-                                 bg=BG3, fg=TEXT_DIM,
-                                 font=("맑은 고딕", 10, "bold"),
-                                 relief="flat", cursor="hand2",
-                                 pady=7, command=self._toggle_mic,
+        ctrl = tk.Frame(self.root, bg=BG, padx=8, pady=8)
+        ctrl.pack(fill="x")
+        self.btn_mic = tk.Button(ctrl, text="🎤  시작", bg=BG3, fg=TEXT_DIM,
+                                 font=("맑은 고딕", 10, "bold"), relief="flat",
+                                 cursor="hand2", pady=7, command=self._toggle_mic,
                                  state="disabled")
         self.btn_mic.pack(fill="x", pady=(0, 6))
-        sub = tk.Frame(ctrl_frame, bg=BG)
+        sub = tk.Frame(ctrl, bg=BG)
         sub.pack(fill="x")
         self.btn_auto = tk.Button(sub, text="AUTO ON", bg=BG2, fg=GREEN,
                                   font=("맑은 고딕", 8), relief="flat",
                                   cursor="hand2", command=self._toggle_auto)
         self.btn_auto.pack(side="left", fill="x", expand=True, padx=(0, 2))
-        tk.Button(sub, text="↩ 재전송", bg=BG2, fg=TEXT_DIM,
-                  font=("맑은 고딕", 8), relief="flat",
-                  cursor="hand2", command=self._resend_last).pack(side="left", fill="x", expand=True, padx=(2, 2))
-        tk.Button(sub, text="🗑 지우기", bg=BG2, fg=TEXT_DIM,
-                  font=("맑은 고딕", 8), relief="flat",
-                  cursor="hand2", command=self._clear).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        tk.Button(sub, text="↩ 재전송", bg=BG2, fg=TEXT_DIM, font=("맑은 고딕", 8),
+                  relief="flat", cursor="hand2",
+                  command=self._resend_last).pack(side="left", fill="x", expand=True, padx=(2, 2))
+        tk.Button(sub, text="🗑 지우기", bg=BG2, fg=TEXT_DIM, font=("맑은 고딕", 8),
+                  relief="flat", cursor="hand2",
+                  command=self._clear).pack(side="left", fill="x", expand=True, padx=(2, 0))
 
     # ── Whisper 모델 로드 ──
     def _load_whisper_model(self):
         def load():
             try:
                 import urllib.request
-                # 모델 캐시 경로 확인
                 cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "whisper")
                 model_file = os.path.join(cache_dir, "small.pt")
-                already_cached = os.path.exists(model_file)
 
-                if not already_cached:
-                    self.root.after(0, lambda: self._set_status("모델 다운로드 중... 0%", YELLOW))
-                    # whisper 내부 다운로드 URL
-                    url = "https://openaipublic.azureedge.net/main/whisper/models/9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794/small.pt"
+                if not os.path.exists(model_file):
                     os.makedirs(cache_dir, exist_ok=True)
+                    url = "https://openaipublic.azureedge.net/main/whisper/models/9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794/small.pt"
 
                     def progress(block, block_size, total):
                         if total > 0:
-                            pct = int(block * block_size * 100 / total)
-                            pct = min(pct, 100)
+                            pct = min(int(block * block_size * 100 / total), 100)
                             mb_done = block * block_size / 1024 / 1024
                             mb_total = total / 1024 / 1024
-                            msg = f"다운로드 중... {pct}% ({mb_done:.0f}/{mb_total:.0f}MB)"
+                            msg = f"모델 다운로드 {pct}% ({mb_done:.0f}/{mb_total:.0f}MB)"
                             self.root.after(0, lambda m=msg: self._set_status(m, YELLOW))
 
                     urllib.request.urlretrieve(url, model_file, reporthook=progress)
@@ -260,18 +231,17 @@ class VoiceDiscordApp:
                 self.root.after(0, lambda: self._set_status("모델 로딩 중...", YELLOW))
                 self.model = whisper.load_model("small")
                 self.model_loaded = True
-                self.root.after(0, lambda: self._set_status("준비됨 (Whisper small)", GREEN))
+                self.root.after(0, lambda: self._set_status("준비됨 ✓", GREEN))
                 self.root.after(0, lambda: self.btn_mic.config(
                     state="normal", bg=DISCORD, fg="white"))
             except Exception as e:
-                self.root.after(0, lambda: self._set_status(f"모델 로드 실패: {e}", RED))
+                self.root.after(0, lambda: self._set_status(f"로드 실패: {e}", RED))
         threading.Thread(target=load, daemon=True).start()
 
     def _set_status(self, text, color=TEXT_DIM):
         self.status_dot.config(fg=color)
         self.status_lbl.config(text=text, fg=color)
 
-    # ── 이름 / 웹훅 ──
     def _change_name(self):
         name = simpledialog.askstring("이름 설정", "사용할 이름을 입력하세요:",
                                       initialvalue=self.user_name, parent=self.root)
@@ -296,21 +266,17 @@ class VoiceDiscordApp:
                     url = data["url"]
             except Exception:
                 pass
-        if "discord.com/api/webhooks/" not in url and "discordapp.com/api/webhooks/" not in url:
+        if "discord.com/api/webhooks/" not in url:
             messagebox.showerror("오류", "올바른 Discord Webhook URL이 아닙니다.", parent=self.root)
             return
         self.webhook_url = url
         self._update_webhook_status()
-        save_name = simpledialog.askstring("저장",
-                                           "이 웹훅을 저장할 이름을 입력하세요\n(취소하면 저장 안 함):",
-                                           parent=self.root)
+        save_name = simpledialog.askstring("저장", "웹훅 저장 이름 (취소하면 저장 안 함):", parent=self.root)
         if save_name and save_name.strip():
             webhooks = self.settings.get("webhooks", [])
             webhooks = [w for w in webhooks if w["url"] != url]
             webhooks.insert(0, {"name": save_name.strip(), "url": url})
-            if len(webhooks) > 10:
-                webhooks = webhooks[:10]
-            self.settings["webhooks"] = webhooks
+            self.settings["webhooks"] = webhooks[:10]
             save_settings(self.settings)
 
     def _show_saved_webhooks(self):
@@ -335,9 +301,8 @@ class VoiceDiscordApp:
                 self._update_webhook_status()
                 self._show_banner("✓ 웹훅 불러옴")
                 w.destroy()
-            tk.Button(row, text="불러오기", bg=DISCORD, fg="white",
-                      relief="flat", font=("맑은 고딕", 8),
-                      cursor="hand2", command=load).pack(side="right")
+            tk.Button(row, text="불러오기", bg=DISCORD, fg="white", relief="flat",
+                      font=("맑은 고딕", 8), cursor="hand2", command=load).pack(side="right")
 
     def _update_webhook_status(self):
         if self.webhook_url:
@@ -348,7 +313,6 @@ class VoiceDiscordApp:
             self.hook_status.config(fg=TEXT_DIM)
             self.hook_lbl.config(text="Webhook 미설정", fg=TEXT_DIM)
 
-    # ── 마이크 토글 ──
     def _toggle_mic(self):
         if not self.model_loaded:
             return
@@ -374,73 +338,54 @@ class VoiceDiscordApp:
         self.is_listening = False
         self.stop_event.set()
         self.btn_mic.config(text="🎤  시작", bg=DISCORD)
-        self._set_status("준비됨 (Whisper small)", GREEN)
+        self._set_status("준비됨 ✓", GREEN)
         self.preview_lbl.config(text="음성을 인식하면 여기에 표시됩니다...", fg=TEXT_DIM)
 
-    # ── 음성 수집 + Whisper 인식 루프 ──
+    # ── 음성 수집 루프 (sounddevice) ──
     def _listen_loop(self):
-        pa = pyaudio.PyAudio()
-        stream = pa.open(format=FORMAT, channels=CHANNELS, rate=RATE,
-                         input=True, frames_per_buffer=CHUNK)
+        chunk_size = int(RATE * 0.1)  # 100ms 청크
+        silence_limit = int(SILENCE_SECONDS / 0.1)
         frames = []
         silent_chunks = 0
         speaking = False
-        silence_limit = int(SILENCE_SECONDS * RATE / CHUNK)
 
-        try:
+        with sd.InputStream(samplerate=RATE, channels=1, dtype='float32') as stream:
             while not self.stop_event.is_set():
-                data = stream.read(CHUNK, exception_on_overflow=False)
-                vol = rms(data)
+                data, _ = stream.read(chunk_size)
+                vol = float(np.sqrt(np.mean(data ** 2)))
 
-                if vol > SILENCE_THRESHOLD:
+                if vol > SILENCE_THRESH:
                     speaking = True
                     silent_chunks = 0
-                    frames.append(data)
+                    frames.append(data.copy())
                     self.root.after(0, lambda: self.preview_lbl.config(
                         text="🎤 말하는 중...", fg=RED))
                 elif speaking:
-                    frames.append(data)
+                    frames.append(data.copy())
                     silent_chunks += 1
                     if silent_chunks >= silence_limit:
-                        # 말이 끝남 → Whisper로 인식
+                        audio = np.concatenate(frames, axis=0).flatten()
                         self.root.after(0, lambda: self.preview_lbl.config(
                             text="⏳ 인식 중...", fg=YELLOW))
-                        audio_data = b"".join(frames)
-                        threading.Thread(
-                            target=self._transcribe,
-                            args=(audio_data,),
-                            daemon=True
-                        ).start()
+                        threading.Thread(target=self._transcribe,
+                                         args=(audio.copy(),), daemon=True).start()
                         frames = []
                         silent_chunks = 0
                         speaking = False
-        finally:
-            stream.stop_stream()
-            stream.close()
-            pa.terminate()
 
-    def _transcribe(self, audio_data):
+    def _transcribe(self, audio):
         try:
-            # 임시 wav 파일로 저장
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
                 tmp_path = tmp.name
-                with wave.open(tmp_path, "wb") as wf:
-                    wf.setnchannels(CHANNELS)
-                    wf.setsampwidth(2)  # paInt16 = 2bytes
-                    wf.setframerate(RATE)
-                    wf.writeframes(audio_data)
-
-            result = self.model.transcribe(tmp_path, language="ko",
-                                           fp16=False, temperature=0)
+            sf.write(tmp_path, audio, RATE)
+            result = self.model.transcribe(tmp_path, language="ko", fp16=False, temperature=0)
             text = result["text"].strip()
             os.unlink(tmp_path)
-
             if text:
                 self.result_queue.put(("final", text))
         except Exception as e:
             self.result_queue.put(("error", str(e)))
 
-    # ── 결과 폴링 ──
     def _poll_results(self):
         try:
             while True:
@@ -453,11 +398,9 @@ class VoiceDiscordApp:
             pass
         self.root.after(100, self._poll_results)
 
-    # ── 메시지 추가 ──
     def _add_message(self, text):
         t = time.strftime("%H:%M")
-        self.messages.append({"text": text, "time": t, "name": self.user_name})
-
+        self.messages.append({"text": text, "time": t})
         row = tk.Frame(self.msg_frame, bg=BG, pady=2)
         row.pack(fill="x", padx=4)
         hdr = tk.Frame(row, bg=BG)
@@ -466,21 +409,16 @@ class VoiceDiscordApp:
                  bg=BG, font=("맑은 고딕", 8, "bold")).pack(side="left")
         tk.Label(hdr, text=f"  {t}", fg=TEXT_DIM,
                  bg=BG, font=("맑은 고딕", 7)).pack(side="left")
-
         bubble = tk.Button(row, text=text, bg=BG3, fg=TEXT,
                            font=("맑은 고딕", 9), relief="flat", cursor="hand2",
                            wraplength=260, justify="left", padx=10, pady=6, anchor="w",
                            command=lambda t=text: self._send_discord(t, manual=True))
         bubble.pack(anchor="w", fill="x")
-
         self.root.after(50, lambda: self.canvas.yview_moveto(1.0))
-        self.preview_lbl.config(
-            text=f'✓ "{text[:28]}{"..." if len(text)>28 else ""}"', fg=GREEN)
-
+        self.preview_lbl.config(text=f'✓ "{text[:28]}{"..." if len(text)>28 else ""}"', fg=GREEN)
         if self.auto_send:
             threading.Thread(target=self._send_discord, args=(text,), daemon=True).start()
 
-    # ── Discord 전송 ──
     def _send_discord(self, text, manual=False):
         if not self.webhook_url:
             self.root.after(0, lambda: self._show_banner("⚠️ Webhook URL을 먼저 입력하세요", RED))
@@ -491,7 +429,7 @@ class VoiceDiscordApp:
                                 json={"content": content, "allowed_mentions": {"parse": []}},
                                 timeout=5)
             if res.status_code in (200, 204):
-                msg = "✓ 수동 전송 완료!" if manual else f"✅ [{self.user_name}] 전송됨"
+                msg = "✓ 수동 전송!" if manual else f"✅ 전송됨"
                 self.root.after(0, lambda: self._show_banner(msg))
             else:
                 self.root.after(0, lambda: self._show_banner(f"⚠️ 전송 실패 ({res.status_code})", RED))
@@ -508,16 +446,12 @@ class VoiceDiscordApp:
 
     def _toggle_auto(self):
         self.auto_send = not self.auto_send
-        if self.auto_send:
-            self.btn_auto.config(text="AUTO ON", fg=GREEN)
-            self._show_banner("🤖 자동 전송 ON")
-        else:
-            self.btn_auto.config(text="AUTO OFF", fg=TEXT_DIM)
-            self._show_banner("자동 전송 OFF")
+        self.btn_auto.config(text="AUTO ON" if self.auto_send else "AUTO OFF",
+                             fg=GREEN if self.auto_send else TEXT_DIM)
+        self._show_banner("🤖 자동 전송 ON" if self.auto_send else "자동 전송 OFF")
 
     def _show_banner(self, msg, color=GREEN):
-        fg = "#003322" if color == GREEN else "white"
-        self.banner.config(text=msg, bg=color, fg=fg)
+        self.banner.config(text=msg, bg=color, fg="#003322" if color == GREEN else "white")
         self.banner.pack(fill="x")
         self.root.after(2500, lambda: self.banner.pack_forget())
 
