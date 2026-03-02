@@ -14,7 +14,7 @@ jobs:
         run: pip install openai-whisper sounddevice soundfile numpy requests pyinstaller torch --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Build VoiceDiscord
-        run: pyinstaller --onefile --noconsole --name "VoiceDiscord" voice_discord.py
+        run: pyinstaller --onefile --name "VoiceDiscord" voice_discord.py
 
       - name: Upload VoiceDiscord
         uses: actions/upload-artifact@v4
