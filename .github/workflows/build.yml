@@ -11,10 +11,10 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install openai-whisper sounddevice soundfile numpy requests pyinstaller torch --extra-index-url https://download.pytorch.org/whl/cpu
+        run: pip install openai-whisper pyaudio requests pyinstaller torch --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Build VoiceDiscord
-        run: pyinstaller --onefile --noconsole --name "VoiceDiscord" --collect-all sounddevice --collect-all soundfile voice_discord.py
+        run: pyinstaller --onefile --noconsole --name "VoiceDiscord" --hidden-import pyaudio voice_discord.py
 
       - name: Upload VoiceDiscord
         uses: actions/upload-artifact@v4
