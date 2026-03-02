@@ -234,8 +234,30 @@ class VoiceDiscordApp:
     def _load_whisper_model(self):
         def load():
             try:
-                self.root.after(0, lambda: self._set_status("Whisper 모델 다운로드/로딩 중... (최초 1회)", YELLOW))
-                # small 모델: 품질과 속도 균형
+                import urllib.request
+                # 모델 캐시 경로 확인
+                cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "whisper")
+                model_file = os.path.join(cache_dir, "small.pt")
+                already_cached = os.path.exists(model_file)
+
+                if not already_cached:
+                    self.root.after(0, lambda: self._set_status("모델 다운로드 중... 0%", YELLOW))
+                    # whisper 내부 다운로드 URL
+                    url = "https://openaipublic.azureedge.net/main/whisper/models/9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794/small.pt"
+                    os.makedirs(cache_dir, exist_ok=True)
+
+                    def progress(block, block_size, total):
+                        if total > 0:
+                            pct = int(block * block_size * 100 / total)
+                            pct = min(pct, 100)
+                            mb_done = block * block_size / 1024 / 1024
+                            mb_total = total / 1024 / 1024
+                            msg = f"다운로드 중... {pct}% ({mb_done:.0f}/{mb_total:.0f}MB)"
+                            self.root.after(0, lambda m=msg: self._set_status(m, YELLOW))
+
+                    urllib.request.urlretrieve(url, model_file, reporthook=progress)
+
+                self.root.after(0, lambda: self._set_status("모델 로딩 중...", YELLOW))
                 self.model = whisper.load_model("small")
                 self.model_loaded = True
                 self.root.after(0, lambda: self._set_status("준비됨 (Whisper small)", GREEN))
