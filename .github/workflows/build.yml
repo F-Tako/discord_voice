@@ -11,7 +11,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install SpeechRecognition pyaudio requests pyinstaller
+        run: pip install openai-whisper pyaudio requests pyinstaller torch --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Build VoiceDiscord
         run: pyinstaller --onefile --noconsole --name "VoiceDiscord" voice_discord.py
