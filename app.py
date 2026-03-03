@@ -1,57 +1,8 @@
 """
 VoiceDiscord 앱 코드
 GitHub에서 자동으로 최신 버전을 받아옵니다.
-이 파일만 수정하면 exe 재빌드 없이 자동 반영됩니다!
 """
 import tkinter as tk
-
-def _ask_string(title, prompt, initialvalue="", parent=None):
-    result = [None]
-    win = tk.Toplevel(parent) if parent else tk.Toplevel()
-    win.title(title)
-    win.configure(bg="#070b14")
-    win.resizable(False, False)
-    win.attributes("-topmost", True)
-    win.geometry("320x130")
-    win.transient(parent)
-    win.grab_set()
-    tk.Label(win, text=prompt, bg="#070b14", fg="#dde6f5", font=("맑은 고딕", 9)).pack(pady=(14,4))
-    entry = tk.Entry(win, font=("맑은 고딕", 9), width=36)
-    entry.insert(0, initialvalue)
-    entry.pack(pady=4)
-    entry.focus()
-    def ok(e=None):
-        result[0] = entry.get()
-        win.destroy()
-    def cancel(e=None):
-        win.destroy()
-    bf = tk.Frame(win, bg="#070b14")
-    bf.pack(pady=6)
-    tk.Button(bf, text="확인", bg="#5865F2", fg="white", relief="flat",
-              font=("맑은 고딕", 9), cursor="hand2", padx=12, command=ok).pack(side="left", padx=4)
-    tk.Button(bf, text="취소", bg="#151d2e", fg="#dde6f5", relief="flat",
-              font=("맑은 고딕", 9), cursor="hand2", padx=12, command=cancel).pack(side="left", padx=4)
-    entry.bind("<Return>", ok)
-    entry.bind("<Escape>", cancel)
-    win.wait_window()
-    return result[0]
-
-def _show_popup(title, msg, color, parent=None):
-    win = tk.Toplevel(parent) if parent else tk.Toplevel()
-    win.title(title)
-    win.configure(bg="#070b14")
-    win.resizable(False, False)
-    win.attributes("-topmost", True)
-    win.geometry("300x110")
-    win.transient(parent)
-    win.grab_set()
-    tk.Label(win, text=msg, bg="#070b14", fg=color,
-             font=("맑은 고딕", 9), wraplength=280).pack(pady=(18,8))
-    tk.Button(win, text="확인", bg="#5865F2", fg="white", relief="flat",
-              font=("맑은 고딕", 9), cursor="hand2", padx=12,
-              command=win.destroy).pack()
-    win.wait_window()
-
 import threading
 import queue
 import time
@@ -61,9 +12,85 @@ import wave
 import tempfile
 import struct
 import math
-import pyaudio
+import ctypes
+import ctypes.wintypes
+
 import requests
 
+# ── Windows WinMM 마이크 녹음 ──
+winmm = ctypes.windll.winmm
+
+WAVE_FORMAT_PCM = 0x0001
+RATE  = 16000
+CHANNELS = 1
+BITS  = 16
+CHUNK_MS = 100  # 100ms 단위로 읽기
+
+class WAVEFORMATEX(ctypes.Structure):
+    _fields_ = [
+        ("wFormatTag",      ctypes.wintypes.WORD),
+        ("nChannels",       ctypes.wintypes.WORD),
+        ("nSamplesPerSec",  ctypes.wintypes.DWORD),
+        ("nAvgBytesPerSec", ctypes.wintypes.DWORD),
+        ("nBlockAlign",     ctypes.wintypes.WORD),
+        ("wBitsPerSample",  ctypes.wintypes.WORD),
+        ("cbSize",          ctypes.wintypes.WORD),
+    ]
+
+class WAVEHDR(ctypes.Structure):
+    _fields_ = [
+        ("lpData",          ctypes.c_char_p),
+        ("dwBufferLength",  ctypes.wintypes.DWORD),
+        ("dwBytesRecorded", ctypes.wintypes.DWORD),
+        ("dwUser",          ctypes.wintypes.DWORD),
+        ("dwFlags",         ctypes.wintypes.DWORD),
+        ("dwLoops",         ctypes.wintypes.DWORD),
+        ("lpNext",          ctypes.c_void_p),
+        ("reserved",        ctypes.wintypes.DWORD),
+    ]
+
+WHDR_DONE = 0x00000001
+
+def record_chunk(hwi, buf_size):
+    buf = ctypes.create_string_buffer(buf_size)
+    hdr = WAVEHDR()
+    hdr.lpData = ctypes.cast(buf, ctypes.c_char_p)
+    hdr.dwBufferLength = buf_size
+    hdr.dwFlags = 0
+    winmm.waveInPrepareHeader(hwi, ctypes.byref(hdr), ctypes.sizeof(hdr))
+    winmm.waveInAddBuffer(hwi, ctypes.byref(hdr), ctypes.sizeof(hdr))
+    winmm.waveInStart(hwi)
+    # 버퍼가 채워질 때까지 대기
+    timeout = time.time() + 1.0
+    while not (hdr.dwFlags & WHDR_DONE):
+        time.sleep(0.005)
+        if time.time() > timeout:
+            break
+    winmm.waveInStop(hwi)
+    winmm.waveInUnprepareHeader(hwi, ctypes.byref(hdr), ctypes.sizeof(hdr))
+    return buf.raw[:hdr.dwBytesRecorded]
+
+def open_mic():
+    fmt = WAVEFORMATEX()
+    fmt.wFormatTag      = WAVE_FORMAT_PCM
+    fmt.nChannels       = CHANNELS
+    fmt.nSamplesPerSec  = RATE
+    fmt.wBitsPerSample  = BITS
+    fmt.nBlockAlign     = CHANNELS * BITS // 8
+    fmt.nAvgBytesPerSec = RATE * fmt.nBlockAlign
+    fmt.cbSize          = 0
+    hwi = ctypes.wintypes.HANDLE()
+    ret = winmm.waveInOpen(ctypes.byref(hwi), 0xFFFFFFFF,
+                           ctypes.byref(fmt), 0, 0, 0)
+    if ret != 0:
+        raise RuntimeError(f"waveInOpen 실패: {ret}")
+    return hwi
+
+def close_mic(hwi):
+    winmm.waveInReset(hwi)
+    winmm.waveInClose(hwi)
+
+# ── 색상 ──
 BG       = "#070b14"
 BG2      = "#0e1420"
 BG3      = "#151d2e"
@@ -75,11 +102,10 @@ TEXT_DIM = "#4a6080"
 YELLOW   = "#fbbf24"
 COLORS   = ["#00c2ff","#ff6b35","#00e5a0","#ff6b9d","#c4b5fd","#fbbf24","#34d399","#f87171"]
 
-STORAGE_FILE = os.path.join(os.path.expanduser("~"), ".voice_discord_settings.json")
-RATE           = 16000
-CHUNK          = 1024
+STORAGE_FILE   = os.path.join(os.path.expanduser("~"), ".voice_discord_settings.json")
 SILENCE_THRESH = 300
 SILENCE_SEC    = 1.2
+BUF_SIZE       = int(RATE * (BITS // 8) * CHANNELS * CHUNK_MS / 1000)
 
 
 def rms(data):
@@ -88,14 +114,12 @@ def rms(data):
     shorts = struct.unpack("%dh" % count, data)
     return math.sqrt(sum(s * s for s in shorts) / count)
 
-
 def load_settings():
     try:
         with open(STORAGE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except:
         return {"webhooks": [], "last_name": ""}
-
 
 def save_settings(data):
     try:
@@ -104,11 +128,58 @@ def save_settings(data):
     except:
         pass
 
-
 def name_to_color(name):
     h = 0
     for c in name: h = (h * 31 + ord(c)) % len(COLORS)
     return COLORS[h]
+
+# ── 커스텀 다이얼로그 ──
+def _ask_string(title, prompt, initialvalue="", parent=None):
+    result = [None]
+    win = tk.Toplevel(parent)
+    win.title(title)
+    win.configure(bg=BG)
+    win.resizable(False, False)
+    win.attributes("-topmost", True)
+    win.geometry("320x130")
+    win.transient(parent)
+    win.grab_set()
+    tk.Label(win, text=prompt, bg=BG, fg=TEXT, font=("맑은 고딕", 9)).pack(pady=(14, 4))
+    entry = tk.Entry(win, font=("맑은 고딕", 9), width=36)
+    entry.insert(0, initialvalue)
+    entry.pack(pady=4)
+    entry.focus()
+    def ok(e=None):
+        result[0] = entry.get()
+        win.destroy()
+    def cancel(e=None):
+        win.destroy()
+    bf = tk.Frame(win, bg=BG)
+    bf.pack(pady=6)
+    tk.Button(bf, text="확인", bg=DISCORD, fg="white", relief="flat",
+              font=("맑은 고딕", 9), cursor="hand2", padx=12, command=ok).pack(side="left", padx=4)
+    tk.Button(bf, text="취소", bg=BG3, fg=TEXT_DIM, relief="flat",
+              font=("맑은 고딕", 9), cursor="hand2", padx=12, command=cancel).pack(side="left", padx=4)
+    entry.bind("<Return>", ok)
+    entry.bind("<Escape>", cancel)
+    win.wait_window()
+    return result[0]
+
+def _show_popup(title, msg, color=TEXT, parent=None):
+    win = tk.Toplevel(parent)
+    win.title(title)
+    win.configure(bg=BG)
+    win.resizable(False, False)
+    win.attributes("-topmost", True)
+    win.geometry("300x120")
+    win.transient(parent)
+    win.grab_set()
+    tk.Label(win, text=msg, bg=BG, fg=color,
+             font=("맑은 고딕", 9), wraplength=280).pack(pady=(18, 8))
+    tk.Button(win, text="확인", bg=DISCORD, fg="white", relief="flat",
+              font=("맑은 고딕", 9), cursor="hand2", padx=12,
+              command=win.destroy).pack()
+    win.wait_window()
 
 
 class VoiceDiscordApp:
@@ -248,7 +319,8 @@ class VoiceDiscordApp:
         self.status_lbl.config(text=text, fg=color)
 
     def _change_name(self):
-        name = _ask_string("이름 설정", "사용할 이름을 입력하세요:", initialvalue=self.user_name, parent=self.root)
+        name = _ask_string("이름 설정", "사용할 이름을 입력하세요:",
+                           initialvalue=self.user_name, parent=self.root)
         if name and name.strip():
             self.user_name = name.strip()
             self.user_color = name_to_color(self.user_name)
@@ -258,7 +330,8 @@ class VoiceDiscordApp:
             save_settings(self.settings)
 
     def _input_webhook(self):
-        url = _ask_string("Webhook URL", "Discord Webhook URL을 입력하세요:", initialvalue=self.webhook_url, parent=self.root)
+        url = _ask_string("Webhook URL", "Discord Webhook URL을 입력하세요:",
+                          initialvalue=self.webhook_url, parent=self.root)
         if not url: return
         url = url.strip()
         if url.startswith("{"):
@@ -267,7 +340,7 @@ class VoiceDiscordApp:
                 if "url" in data: url = data["url"]
             except: pass
         if "discord.com/api/webhooks/" not in url:
-            _show_popup("오류", "올바른 Discord Webhook URL이 아닙니다.", "#ff6b35", parent=self.root)
+            _show_popup("오류", "올바른 Discord Webhook URL이 아닙니다.", RED, parent=self.root)
             return
         self.webhook_url = url
         self._update_webhook_status()
@@ -282,7 +355,7 @@ class VoiceDiscordApp:
     def _show_saved_webhooks(self):
         webhooks = self.settings.get("webhooks", [])
         if not webhooks:
-            _show_popup("저장된 웹훅", "저장된 웹훅이 없습니다.", "#dde6f5", parent=self.root)
+            _show_popup("저장된 웹훅", "저장된 웹훅이 없습니다.", TEXT, parent=self.root)
             return
         win = tk.Toplevel(self.root)
         win.title("저장된 Webhook")
@@ -316,10 +389,10 @@ class VoiceDiscordApp:
         if self.is_listening: self._stop_listening()
         else:
             if not self.user_name:
-                _show_popup("이름 미설정", "먼저 이름을 설정해주세요!", "#fbbf24", parent=self.root)
+                _show_popup("이름 미설정", "먼저 이름을 설정해주세요!", YELLOW, parent=self.root)
                 return
             if not self.webhook_url:
-                _show_popup("웹훅 미설정", "먼저 Webhook URL을 입력해주세요!", "#fbbf24", parent=self.root)
+                _show_popup("웹훅 미설정", "먼저 Webhook URL을 입력해주세요!", YELLOW, parent=self.root)
                 return
             self._start_listening()
 
@@ -338,16 +411,24 @@ class VoiceDiscordApp:
         self.preview_lbl.config(text="음성을 인식하면 여기에 표시됩니다...", fg=TEXT_DIM)
 
     def _listen_loop(self):
-        pa = pyaudio.PyAudio()
-        stream = pa.open(format=pyaudio.paInt16, channels=1, rate=RATE,
-                         input=True, frames_per_buffer=CHUNK)
+        try:
+            hwi = open_mic()
+        except Exception as e:
+            self.root.after(0, lambda: self._set_status(f"마이크 오류: {e}", RED))
+            self.is_listening = False
+            self.root.after(0, lambda: self.btn_mic.config(text="🎤  시작", bg=DISCORD))
+            return
+
         frames = []
         silent_chunks = 0
         speaking = False
-        silence_limit = int(SILENCE_SEC * RATE / CHUNK)
+        silence_limit = int(SILENCE_SEC * 1000 / CHUNK_MS)
+
         try:
             while not self.stop_event.is_set():
-                data = stream.read(CHUNK, exception_on_overflow=False)
+                data = record_chunk(hwi, BUF_SIZE)
+                if not data:
+                    continue
                 vol = rms(data)
                 if vol > SILENCE_THRESH:
                     speaking = True
@@ -368,17 +449,15 @@ class VoiceDiscordApp:
                         silent_chunks = 0
                         speaking = False
         finally:
-            stream.stop_stream()
-            stream.close()
-            pa.terminate()
+            close_mic(hwi)
 
     def _transcribe(self, audio_data):
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
                 tmp_path = tmp.name
             with wave.open(tmp_path, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
+                wf.setnchannels(CHANNELS)
+                wf.setsampwidth(BITS // 8)
                 wf.setframerate(RATE)
                 wf.writeframes(audio_data)
             result = self.model.transcribe(tmp_path, language="ko", fp16=False, temperature=0)
