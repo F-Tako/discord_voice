@@ -4,8 +4,8 @@ GitHub에서 자동으로 최신 버전을 받아옵니다.
 이 파일만 수정하면 exe 재빌드 없이 자동 반영됩니다!
 """
 import tkinter as tk
-import tkinter.simpledialog as simpledialog
-import tkinter.messagebox as messagebox
+from tkinter import simpledialog
+from tkinter import messagebox
 import threading
 import queue
 import time
