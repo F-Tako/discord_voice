@@ -1,6 +1,6 @@
 """
-VoiceDiscord 앱 코드
-GitHub에서 자동으로 최신 버전을 받아옵니다.
+VoiceDiscord 앱 코드 - Google Web Speech API 버전
+HTML 버전과 동일한 품질의 음성인식!
 """
 import tkinter as tk
 import threading
@@ -14,17 +14,16 @@ import struct
 import math
 import ctypes
 import ctypes.wintypes
-
-import requests
+import requests as req_lib
 
 # ── Windows WinMM 마이크 녹음 ──
 winmm = ctypes.windll.winmm
-
 WAVE_FORMAT_PCM = 0x0001
-RATE  = 16000
+RATE     = 16000
 CHANNELS = 1
-BITS  = 16
-CHUNK_MS = 100  # 100ms 단위로 읽기
+BITS     = 16
+CHUNK_MS = 100
+BUF_SIZE = int(RATE * (BITS // 8) * CHANNELS * CHUNK_MS / 1000)
 
 class WAVEFORMATEX(ctypes.Structure):
     _fields_ = [
@@ -51,16 +50,15 @@ class WAVEHDR(ctypes.Structure):
 
 WHDR_DONE = 0x00000001
 
-def record_chunk(hwi, buf_size):
-    buf = ctypes.create_string_buffer(buf_size)
+def record_chunk(hwi):
+    buf = ctypes.create_string_buffer(BUF_SIZE)
     hdr = WAVEHDR()
     hdr.lpData = ctypes.cast(buf, ctypes.c_char_p)
-    hdr.dwBufferLength = buf_size
+    hdr.dwBufferLength = BUF_SIZE
     hdr.dwFlags = 0
     winmm.waveInPrepareHeader(hwi, ctypes.byref(hdr), ctypes.sizeof(hdr))
     winmm.waveInAddBuffer(hwi, ctypes.byref(hdr), ctypes.sizeof(hdr))
     winmm.waveInStart(hwi)
-    # 버퍼가 채워질 때까지 대기
     timeout = time.time() + 1.0
     while not (hdr.dwFlags & WHDR_DONE):
         time.sleep(0.005)
@@ -83,12 +81,50 @@ def open_mic():
     ret = winmm.waveInOpen(ctypes.byref(hwi), 0xFFFFFFFF,
                            ctypes.byref(fmt), 0, 0, 0)
     if ret != 0:
-        raise RuntimeError(f"waveInOpen 실패: {ret}")
+        raise RuntimeError(f"마이크 열기 실패 (코드: {ret})")
     return hwi
 
 def close_mic(hwi):
     winmm.waveInReset(hwi)
     winmm.waveInClose(hwi)
+
+def rms(data):
+    count = len(data) // 2
+    if count == 0: return 0
+    shorts = struct.unpack("%dh" % count, data)
+    return math.sqrt(sum(s * s for s in shorts) / count)
+
+# ── Google Web Speech API 인식 ──
+def recognize_google(audio_data):
+    # wav 파일로 저장 후 Google API 전송
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        with wave.open(tmp_path, "wb") as wf:
+            wf.setnchannels(CHANNELS)
+            wf.setsampwidth(BITS // 8)
+            wf.setframerate(RATE)
+            wf.writeframes(audio_data)
+        with open(tmp_path, "rb") as f:
+            wav_data = f.read()
+        url = "http://www.google.com/speech-api/v2/recognize?client=chromium&lang=ko-KR&key=AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw"
+        headers = {"Content-Type": "audio/l16; rate=16000"}
+        resp = req_lib.post(url, data=wav_data, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            lines = [l for l in resp.text.strip().split("\n") if l.strip()]
+            for line in lines:
+                try:
+                    data = json.loads(line)
+                    results = data.get("result", [])
+                    for r in results:
+                        alts = r.get("alternative", [])
+                        if alts:
+                            return alts[0].get("transcript", "").strip()
+                except: pass
+        return ""
+    finally:
+        try: os.unlink(tmp_path)
+        except: pass
 
 # ── 색상 ──
 BG       = "#070b14"
@@ -105,35 +141,24 @@ COLORS   = ["#00c2ff","#ff6b35","#00e5a0","#ff6b9d","#c4b5fd","#fbbf24","#34d399
 STORAGE_FILE   = os.path.join(os.path.expanduser("~"), ".voice_discord_settings.json")
 SILENCE_THRESH = 300
 SILENCE_SEC    = 1.2
-BUF_SIZE       = int(RATE * (BITS // 8) * CHANNELS * CHUNK_MS / 1000)
-
-
-def rms(data):
-    count = len(data) // 2
-    if count == 0: return 0
-    shorts = struct.unpack("%dh" % count, data)
-    return math.sqrt(sum(s * s for s in shorts) / count)
 
 def load_settings():
     try:
         with open(STORAGE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
-        return {"webhooks": [], "last_name": ""}
+    except: return {"webhooks": [], "last_name": ""}
 
 def save_settings(data):
     try:
         with open(STORAGE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-    except:
-        pass
+    except: pass
 
 def name_to_color(name):
     h = 0
     for c in name: h = (h * 31 + ord(c)) % len(COLORS)
     return COLORS[h]
 
-# ── 커스텀 다이얼로그 ──
 def _ask_string(title, prompt, initialvalue="", parent=None):
     result = [None]
     win = tk.Toplevel(parent)
@@ -149,11 +174,8 @@ def _ask_string(title, prompt, initialvalue="", parent=None):
     entry.insert(0, initialvalue)
     entry.pack(pady=4)
     entry.focus()
-    def ok(e=None):
-        result[0] = entry.get()
-        win.destroy()
-    def cancel(e=None):
-        win.destroy()
+    def ok(e=None): result[0] = entry.get(); win.destroy()
+    def cancel(e=None): win.destroy()
     bf = tk.Frame(win, bg=BG)
     bf.pack(pady=6)
     tk.Button(bf, text="확인", bg=DISCORD, fg="white", relief="flat",
@@ -183,8 +205,7 @@ def _show_popup(title, msg, color=TEXT, parent=None):
 
 
 class VoiceDiscordApp:
-    def __init__(self, model):
-        self.model = model
+    def __init__(self):
         self.root = tk.Tk()
         self.root.title("음성 → Discord")
         self.root.configure(bg=BG)
@@ -415,6 +436,7 @@ class VoiceDiscordApp:
             hwi = open_mic()
         except Exception as e:
             self.root.after(0, lambda: self._set_status(f"마이크 오류: {e}", RED))
+            self.root.after(0, lambda: self._add_error_message(str(e)))
             self.is_listening = False
             self.root.after(0, lambda: self.btn_mic.config(text="🎤  시작", bg=DISCORD))
             return
@@ -426,9 +448,8 @@ class VoiceDiscordApp:
 
         try:
             while not self.stop_event.is_set():
-                data = record_chunk(hwi, BUF_SIZE)
-                if not data:
-                    continue
+                data = record_chunk(hwi)
+                if not data: continue
                 vol = rms(data)
                 if vol > SILENCE_THRESH:
                     speaking = True
@@ -453,11 +474,7 @@ class VoiceDiscordApp:
 
     def _transcribe(self, audio_data):
         try:
-            import numpy as np
-            # wav 파일 없이 numpy 배열로 직접 Whisper에 넘김 (ffmpeg 불필요)
-            audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-            result = self.model.transcribe(audio_np, language="ko", fp16=False, temperature=0)
-            text = result["text"].strip()
+            text = recognize_google(audio_data)
             if text:
                 self.result_queue.put(("final", text))
         except Exception as e:
@@ -479,7 +496,8 @@ class VoiceDiscordApp:
         row = tk.Frame(self.msg_frame, bg=BG, pady=2)
         row.pack(fill="x", padx=4)
         tk.Label(row, text=f"⚠️ {text}", bg=BG, fg=RED,
-                 font=("맑은 고딕", 8), wraplength=280, justify="left", anchor="w").pack(fill="x", padx=4)
+                 font=("맑은 고딕", 8), wraplength=280,
+                 justify="left", anchor="w").pack(fill="x", padx=4)
         self.root.after(50, lambda: self.canvas.yview_moveto(1.0))
 
     def _add_message(self, text):
@@ -508,9 +526,9 @@ class VoiceDiscordApp:
             self.root.after(0, lambda: self._show_banner("⚠️ Webhook URL을 먼저 입력하세요", RED))
             return
         try:
-            res = requests.post(self.webhook_url,
-                                json={"content": f"[{self.user_name}] {text}",
-                                      "allowed_mentions": {"parse": []}}, timeout=5)
+            res = req_lib.post(self.webhook_url,
+                               json={"content": f"[{self.user_name}] {text}",
+                                     "allowed_mentions": {"parse": []}}, timeout=5)
             if res.status_code in (200, 204):
                 self.root.after(0, lambda: self._show_banner(
                     "✓ 수동 전송!" if manual else "✅ 전송됨"))
