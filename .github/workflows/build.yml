@@ -1,5 +1,9 @@
 name: Build EXE
-on: [push]
+on:
+  push:
+    paths:
+      - 'VoiceDiscord.py'
+      - '.github/workflows/build.yml'
 jobs:
   build:
     runs-on: windows-latest
