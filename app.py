@@ -461,17 +461,26 @@ class VoiceDiscordApp:
             if text:
                 self.result_queue.put(("final", text))
         except Exception as e:
-            self.result_queue.put(("error", str(e)))
+            self.result_queue.put(("error", f"[인식 오류] {e}"))
 
     def _poll_results(self):
         try:
             while True:
                 kind, text = self.result_queue.get_nowait()
                 if kind == "final": self._add_message(text)
-                elif kind == "error": self._set_status(f"오류: {text}", RED)
+                elif kind == "error":
+                    self._set_status(f"오류: {text}", RED)
+                    self._add_error_message(text)
         except queue.Empty:
             pass
         self.root.after(100, self._poll_results)
+
+    def _add_error_message(self, text):
+        row = tk.Frame(self.msg_frame, bg=BG, pady=2)
+        row.pack(fill="x", padx=4)
+        tk.Label(row, text=f"⚠️ {text}", bg=BG, fg=RED,
+                 font=("맑은 고딕", 8), wraplength=280, justify="left", anchor="w").pack(fill="x", padx=4)
+        self.root.after(50, lambda: self.canvas.yview_moveto(1.0))
 
     def _add_message(self, text):
         t = time.strftime("%H:%M")
