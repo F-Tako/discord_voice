@@ -453,16 +453,11 @@ class VoiceDiscordApp:
 
     def _transcribe(self, audio_data):
         try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                tmp_path = tmp.name
-            with wave.open(tmp_path, "wb") as wf:
-                wf.setnchannels(CHANNELS)
-                wf.setsampwidth(BITS // 8)
-                wf.setframerate(RATE)
-                wf.writeframes(audio_data)
-            result = self.model.transcribe(tmp_path, language="ko", fp16=False, temperature=0)
+            import numpy as np
+            # wav 파일 없이 numpy 배열로 직접 Whisper에 넘김 (ffmpeg 불필요)
+            audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+            result = self.model.transcribe(audio_np, language="ko", fp16=False, temperature=0)
             text = result["text"].strip()
-            os.unlink(tmp_path)
             if text:
                 self.result_queue.put(("final", text))
         except Exception as e:
