@@ -4,8 +4,54 @@ GitHub에서 자동으로 최신 버전을 받아옵니다.
 이 파일만 수정하면 exe 재빌드 없이 자동 반영됩니다!
 """
 import tkinter as tk
-from tkinter import simpledialog
-from tkinter import messagebox
+
+def _ask_string(title, prompt, initialvalue="", parent=None):
+    result = [None]
+    win = tk.Toplevel(parent) if parent else tk.Toplevel()
+    win.title(title)
+    win.configure(bg="#070b14")
+    win.resizable(False, False)
+    win.attributes("-topmost", True)
+    win.geometry("320x130")
+    win.transient(parent)
+    win.grab_set()
+    tk.Label(win, text=prompt, bg="#070b14", fg="#dde6f5", font=("맑은 고딕", 9)).pack(pady=(14,4))
+    entry = tk.Entry(win, font=("맑은 고딕", 9), width=36)
+    entry.insert(0, initialvalue)
+    entry.pack(pady=4)
+    entry.focus()
+    def ok(e=None):
+        result[0] = entry.get()
+        win.destroy()
+    def cancel(e=None):
+        win.destroy()
+    bf = tk.Frame(win, bg="#070b14")
+    bf.pack(pady=6)
+    tk.Button(bf, text="확인", bg="#5865F2", fg="white", relief="flat",
+              font=("맑은 고딕", 9), cursor="hand2", padx=12, command=ok).pack(side="left", padx=4)
+    tk.Button(bf, text="취소", bg="#151d2e", fg="#dde6f5", relief="flat",
+              font=("맑은 고딕", 9), cursor="hand2", padx=12, command=cancel).pack(side="left", padx=4)
+    entry.bind("<Return>", ok)
+    entry.bind("<Escape>", cancel)
+    win.wait_window()
+    return result[0]
+
+def _show_popup(title, msg, color, parent=None):
+    win = tk.Toplevel(parent) if parent else tk.Toplevel()
+    win.title(title)
+    win.configure(bg="#070b14")
+    win.resizable(False, False)
+    win.attributes("-topmost", True)
+    win.geometry("300x110")
+    win.transient(parent)
+    win.grab_set()
+    tk.Label(win, text=msg, bg="#070b14", fg=color,
+             font=("맑은 고딕", 9), wraplength=280).pack(pady=(18,8))
+    tk.Button(win, text="확인", bg="#5865F2", fg="white", relief="flat",
+              font=("맑은 고딕", 9), cursor="hand2", padx=12,
+              command=win.destroy).pack()
+    win.wait_window()
+
 import threading
 import queue
 import time
@@ -202,8 +248,7 @@ class VoiceDiscordApp:
         self.status_lbl.config(text=text, fg=color)
 
     def _change_name(self):
-        name = simpledialog.askstring("이름 설정", "사용할 이름을 입력하세요:",
-                                      initialvalue=self.user_name, parent=self.root)
+        name = _ask_string("이름 설정", "사용할 이름을 입력하세요:", initialvalue=self.user_name, parent=self.root)
         if name and name.strip():
             self.user_name = name.strip()
             self.user_color = name_to_color(self.user_name)
@@ -213,8 +258,7 @@ class VoiceDiscordApp:
             save_settings(self.settings)
 
     def _input_webhook(self):
-        url = simpledialog.askstring("Webhook URL", "Discord Webhook URL을 입력하세요:",
-                                     initialvalue=self.webhook_url, parent=self.root)
+        url = _ask_string("Webhook URL", "Discord Webhook URL을 입력하세요:", initialvalue=self.webhook_url, parent=self.root)
         if not url: return
         url = url.strip()
         if url.startswith("{"):
@@ -223,12 +267,11 @@ class VoiceDiscordApp:
                 if "url" in data: url = data["url"]
             except: pass
         if "discord.com/api/webhooks/" not in url:
-            messagebox.showerror("오류", "올바른 Discord Webhook URL이 아닙니다.", parent=self.root)
+            _show_popup("오류", "올바른 Discord Webhook URL이 아닙니다.", "#ff6b35", parent=self.root)
             return
         self.webhook_url = url
         self._update_webhook_status()
-        save_name = simpledialog.askstring("저장", "웹훅 저장 이름 (취소하면 저장 안 함):",
-                                           parent=self.root)
+        save_name = _ask_string("저장", "웹훅 저장 이름 (취소하면 저장 안 함):", parent=self.root)
         if save_name and save_name.strip():
             webhooks = self.settings.get("webhooks", [])
             webhooks = [w for w in webhooks if w["url"] != url]
@@ -239,7 +282,7 @@ class VoiceDiscordApp:
     def _show_saved_webhooks(self):
         webhooks = self.settings.get("webhooks", [])
         if not webhooks:
-            messagebox.showinfo("저장된 웹훅", "저장된 웹훅이 없습니다.", parent=self.root)
+            _show_popup("저장된 웹훅", "저장된 웹훅이 없습니다.", "#dde6f5", parent=self.root)
             return
         win = tk.Toplevel(self.root)
         win.title("저장된 Webhook")
@@ -273,10 +316,10 @@ class VoiceDiscordApp:
         if self.is_listening: self._stop_listening()
         else:
             if not self.user_name:
-                messagebox.showwarning("이름 미설정", "먼저 이름을 설정해주세요!", parent=self.root)
+                _show_popup("이름 미설정", "먼저 이름을 설정해주세요!", "#fbbf24", parent=self.root)
                 return
             if not self.webhook_url:
-                messagebox.showwarning("웹훅 미설정", "먼저 Webhook URL을 입력해주세요!", parent=self.root)
+                _show_popup("웹훅 미설정", "먼저 Webhook URL을 입력해주세요!", "#fbbf24", parent=self.root)
                 return
             self._start_listening()
 
