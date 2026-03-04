@@ -651,11 +651,18 @@ function initSpeech() {
     if (final.trim()) { addMessage(final.trim()); transcriptTxt.textContent = '듣고 있습니다...'; }
   };
   recognition.onerror = (e) => {
-    if (e.error === 'no-speech') return; // 무음이면 그냥 계속
-    const m = { 'not-allowed':'마이크 접근 거부', 'network':'네트워크 오류' };
-    addSysMsg('⚠️ ' + (m[e.error] || '오류')); stopListening();
+    if (e.error === 'not-allowed') {
+      addSysMsg('⚠️ 마이크 접근 거부'); stopListening(); return;
+    }
+    // no-speech, network, audio-capture 등 나머지는 무시하고 재시작
   };
-  recognition.onend = () => { if (isListening) { try { recognition.start(); } catch(_){} } else stopListening(); };
+  recognition.onend = () => {
+    if (!isListening) { stopListening(); return; }
+    // 항상 재시작 시도
+    setTimeout(() => {
+      if (isListening) { try { recognition.start(); } catch(_){} }
+    }, 200);
+  };
 }
 
 function stopListening() {
