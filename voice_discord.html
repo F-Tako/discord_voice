@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>음성 → Discord 멀티</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #070b14;
+  --surface: #0e1420;
+  --surface2: #151d2e;
+  --border: #1e2d47;
+  --accent: #00c2ff;
+  --accent2: #ff6b35;
+  --discord: #5865F2;
+  --discord-glow: rgba(88,101,242,0.4);
+  --green: #00e5a0;
+  --text: #dde6f5;
+  --text-dim: #4a6080;
+  --glow: rgba(0,194,255,0.25);
+  --mono: 'IBM Plex Mono', monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background:var(--bg); color:var(--text);
+  font-family:'Noto Sans KR',sans-serif;
+  height:100vh; display:flex; flex-direction:column; overflow:hidden;
+}
+body::before {
+  content:''; position:fixed; top:0; left:0; width:100%; height:100%;
+  background:
+    radial-gradient(ellipse at 10% 0%,rgba(0,194,255,0.06) 0%,transparent 45%),
+    radial-gradient(ellipse at 90% 100%,rgba(88,101,242,0.05) 0%,transparent 45%);
+  pointer-events:none; z-index:0;
+}
+
+/* ── SETUP PANEL ── */
+.setup-panel {
+  position:fixed; inset:0; z-index:100;
+  background:rgba(7,11,20,0.98);
+  display:flex; align-items:center; justify-content:center;
+}
+.setup-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:20px; padding:36px 32px; width:340px;
+  display:flex; flex-direction:column; gap:18px;
+  box-shadow:0 24px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,194,255,0.04);
+}
+.setup-logo {
+  width:40px; height:40px; border-radius:12px;
+  background:linear-gradient(135deg,var(--accent),var(--discord));
+  display:flex; align-items:center; justify-content:center; font-size:18px;
+  box-shadow:0 0 20px var(--glow);
+}
+.setup-card h2 { font-family:var(--mono); font-size:15px; color:var(--text); margin-top:2px; }
+.setup-card .sub { font-size:11px; color:var(--text-dim); line-height:1.6; margin-top:-6px; }
+
+.field { display:flex; flex-direction:column; gap:6px; }
+.field label { font-family:var(--mono); font-size:10px; color:var(--text-dim); letter-spacing:.06em; }
+
+.inp {
+  background:var(--surface2); border:1px solid var(--border);
+  border-radius:10px; padding:11px 14px; font-size:14px; color:var(--text);
+  font-family:'Noto Sans KR',sans-serif; outline:none; transition:all .2s; width:100%;
+}
+.inp.mono { font-size:11px; font-family:var(--mono); }
+.inp:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(0,194,255,.07); }
+.inp.valid { border-color:var(--green); }
+.inp.err { border-color:var(--accent2); }
+
+/* mic permission notice */
+.mic-notice {
+  font-size:10px; color:var(--text-dim); font-family:var(--mono); line-height:1.5;
+  padding:8px 10px; background:rgba(0,229,160,.03); border:1px solid rgba(0,229,160,.2);
+  border-radius:8px; display:flex; gap:6px; align-items:flex-start;
+}
+.mic-notice .icon { flex-shrink:0; }
+.mic-notice strong { color:var(--green); }
+
+/* saved webhooks in setup */
+.saved-section { display:flex; flex-direction:column; gap:6px; }
+.saved-section-label { font-family:var(--mono); font-size:10px; color:var(--text-dim); letter-spacing:.06em; }
+.saved-chips-row { display:flex; gap:5px; flex-wrap:wrap; }
+.s-chip {
+  display:flex; align-items:center;
+  background:var(--surface2); border:1px solid var(--border);
+  border-radius:16px; overflow:hidden; cursor:pointer; transition:all .15s;
+}
+.s-chip:hover { border-color:var(--accent); }
+.s-chip-name { padding:4px 10px; font-size:11px; font-family:var(--mono); color:var(--text); }
+.s-chip-del { padding:3px 8px 3px 2px; background:none; border:none; color:var(--text-dim); font-size:11px; cursor:pointer; transition:color .15s; }
+.s-chip-del:hover { color:var(--accent2); }
+.no-saved-txt { font-size:10px; color:var(--text-dim); font-style:italic; font-family:var(--mono); }
+
+.btn-start {
+  padding:13px; border-radius:10px; border:none;
+  background:linear-gradient(135deg,var(--accent),var(--discord));
+  color:white; font-size:14px; font-weight:600; cursor:pointer;
+  transition:all .2s; box-shadow:0 4px 20px var(--glow);
+  font-family:'Noto Sans KR',sans-serif; letter-spacing:.02em;
+  display:flex; align-items:center; justify-content:center; gap:8px;
+}
+.btn-start:hover { transform:translateY(-1px); box-shadow:0 6px 28px var(--glow); }
+.btn-start:active { transform:translateY(0); }
+.btn-start:disabled { opacity:.6; cursor:not-allowed; transform:none; }
+
+.divider { border:none; border-top:1px solid var(--border); margin:2px 0; }
+
+/* permission overlay */
+.perm-overlay {
+  position:fixed; inset:0; z-index:200;
+  background:rgba(7,11,20,0.97);
+  display:none; align-items:center; justify-content:center; flex-direction:column; gap:16px;
+}
+.perm-overlay.show { display:flex; }
+.perm-icon { font-size:48px; animation:bob 1.5s ease-in-out infinite; }
+@keyframes bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+.perm-title { font-family:var(--mono); font-size:14px; color:var(--text); }
+.perm-sub { font-size:11px; color:var(--text-dim); text-align:center; line-height:1.8; }
+.perm-spinner {
+  width:32px; height:32px; border:2px solid var(--border);
+  border-top-color:var(--accent); border-radius:50%;
+  animation:spin .8s linear infinite;
+}
+@keyframes spin { to{transform:rotate(360deg)} }
+
+/* ── HEADER ── */
+header {
+  position:relative; z-index:10; padding:12px 20px;
+  border-bottom:1px solid var(--border);
+  background:rgba(7,11,20,0.9); backdrop-filter:blur(20px);
+  display:flex; align-items:center; gap:12px;
+}
+.logo {
+  width:30px; height:30px; border-radius:8px;
+  background:linear-gradient(135deg,var(--accent),var(--discord));
+  display:flex; align-items:center; justify-content:center;
+  font-size:13px; box-shadow:0 0 14px var(--glow); flex-shrink:0;
+}
+.title-group h1 { font-family:var(--mono); font-size:12px; font-weight:600; letter-spacing:.1em; }
+.title-group p { font-size:10px; color:var(--text-dim); margin-top:1px; }
+.header-right { margin-left:auto; display:flex; align-items:center; gap:8px; }
+.status-pill {
+  display:flex; align-items:center; gap:5px;
+  font-family:var(--mono); font-size:10px; color:var(--text-dim);
+  background:var(--surface2); border:1px solid var(--border);
+  border-radius:20px; padding:4px 10px;
+}
+.sdot { width:6px; height:6px; border-radius:50%; background:#2a3a50; transition:all .3s; }
+.sdot.ready { background:var(--green); box-shadow:0 0 6px var(--green); }
+.sdot.on { background:var(--accent2); box-shadow:0 0 6px var(--accent2); animation:blink 1s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+/* ── TOOLBAR ── */
+.toolbar {
+  position:relative; z-index:9; padding:7px 16px;
+  background:rgba(7,11,20,0.8); border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:8px;
+}
+.user-badge {
+  display:flex; align-items:center; gap:6px;
+  background:var(--surface2); border:1px solid var(--border);
+  border-radius:20px; padding:4px 12px 4px 7px;
+  font-size:11px; font-family:var(--mono); color:var(--text);
+}
+.user-avatar {
+  width:20px; height:20px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:10px; font-weight:700; flex-shrink:0; color:white;
+}
+.btn-settings {
+  margin-left:auto; padding:5px 11px; border-radius:8px;
+  border:1px solid var(--border); background:var(--surface2);
+  color:var(--text-dim); font-size:10px; font-family:var(--mono);
+  cursor:pointer; transition:all .2s; display:flex; align-items:center; gap:4px;
+}
+.btn-settings:hover { border-color:var(--accent); color:var(--accent); }
+
+/* ── CHAT ── */
+.chat-container {
+  flex:1; overflow-y:auto; padding:16px 20px;
+  display:flex; flex-direction:column; gap:10px; position:relative; z-index:1;
+}
+.chat-container::-webkit-scrollbar { width:3px; }
+.chat-container::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+
+.message { display:flex; flex-direction:column; max-width:80%; animation:msg-in .25s cubic-bezier(.34,1.56,.64,1); }
+@keyframes msg-in { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+.message.mine { align-self:flex-end; align-items:flex-end; }
+.message.sys-msg { align-self:center; }
+
+.msg-header { font-size:10px; color:var(--text-dim); margin-bottom:3px; font-family:var(--mono); display:flex; align-items:center; gap:5px; }
+.msg-name { font-weight:600; }
+.bubble { padding:10px 14px; border-radius:14px; font-size:13px; line-height:1.6; word-break:break-word; }
+.message.mine .bubble {
+  background:linear-gradient(135deg,rgba(0,194,255,.1),rgba(88,101,242,.1));
+  border:1px solid rgba(0,194,255,.18); border-bottom-right-radius:3px; color:#c8e8ff;
+}
+.message.sys-msg .bubble {
+  background:transparent; border:1px dashed var(--border);
+  color:var(--text-dim); font-size:11px; font-style:italic; border-radius:8px; padding:6px 12px;
+}
+.msg-actions { display:flex; gap:4px; margin-top:4px; opacity:0; transition:opacity .2s; }
+.message:hover .msg-actions { opacity:1; }
+.act-btn {
+  padding:2px 8px; border-radius:5px; border:none; font-size:10px; cursor:pointer;
+  font-family:var(--mono); display:flex; align-items:center; gap:3px; transition:all .15s;
+}
+.act-copy { background:var(--surface2); border:1px solid var(--border); color:var(--text-dim); }
+.act-copy:hover { border-color:var(--accent); color:var(--accent); }
+.act-send { background:rgba(88,101,242,.1); border:1px solid rgba(88,101,242,.3); color:#9ea6f5; }
+.act-send:hover { background:var(--discord); border-color:var(--discord); color:white; }
+.act-send.sent { background:rgba(0,229,160,.1); border-color:rgba(0,229,160,.3); color:var(--green); }
+
+.empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; color:var(--text-dim); }
+.empty-icon { font-size:44px; opacity:.2; }
+.empty-state p { font-size:12px; text-align:center; line-height:1.8; }
+
+/* ── MIC ── */
+.mic-section {
+  position:relative; z-index:10; padding:14px 20px 18px;
+  background:rgba(7,11,20,.95); backdrop-filter:blur(20px);
+  border-top:1px solid var(--border);
+}
+.transcript-box {
+  background:var(--surface2); border:1px solid var(--border); border-radius:10px;
+  padding:9px 14px; margin-bottom:12px; min-height:40px;
+  font-size:12px; color:var(--text-dim);
+  display:flex; align-items:center; gap:8px; transition:all .3s;
+}
+.transcript-box.active { border-color:rgba(0,194,255,.35); color:var(--text); background:rgba(0,194,255,.04); }
+.transcript-txt { flex:1; font-style:italic; }
+.waveform { display:flex; align-items:center; gap:2px; opacity:0; transition:opacity .3s; }
+.waveform.active { opacity:1; }
+.wbar { width:2px; height:4px; background:var(--accent); border-radius:2px; animation:wv .7s ease-in-out infinite; }
+.wbar:nth-child(1){animation-delay:0s}.wbar:nth-child(2){animation-delay:.1s}.wbar:nth-child(3){animation-delay:.2s}
+.wbar:nth-child(4){animation-delay:.3s}.wbar:nth-child(5){animation-delay:.2s}.wbar:nth-child(6){animation-delay:.1s}
+@keyframes wv { 0%,100%{height:3px} 50%{height:16px} }
+
+.controls { display:flex; align-items:center; gap:10px; justify-content:center; }
+.btn-mic {
+  width:58px; height:58px; border-radius:50%; border:none;
+  background:linear-gradient(135deg,var(--accent),var(--discord));
+  color:white; font-size:20px; cursor:pointer; position:relative;
+  transition:all .2s; box-shadow:0 4px 20px var(--glow);
+  display:flex; align-items:center; justify-content:center;
+}
+.btn-mic::before { content:''; position:absolute; inset:-3px; border-radius:50%; border:1.5px solid rgba(0,194,255,.2); transition:all .3s; }
+.btn-mic:hover { transform:scale(1.05); }
+.btn-mic.on { background:linear-gradient(135deg,var(--accent2),#ff3520); box-shadow:0 4px 24px rgba(255,107,53,.4); animation:mpulse 1.2s infinite; }
+.btn-mic.on::before { border-color:rgba(255,107,53,.35); animation:mring 1.2s ease-out infinite; }
+@keyframes mpulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.03)} }
+@keyframes mring { 0%{inset:-3px;opacity:1} 100%{inset:-14px;opacity:0} }
+
+.btn-sm {
+  width:38px; height:38px; border-radius:50%; border:1px solid var(--border);
+  background:var(--surface2); color:var(--text-dim); font-size:13px; cursor:pointer;
+  transition:all .2s; display:flex; align-items:center; justify-content:center;
+}
+.btn-sm:hover { border-color:var(--accent2); color:var(--accent2); }
+.btn-auto {
+  width:44px; height:36px; border-radius:8px; border:1px solid var(--border);
+  background:var(--surface2); color:var(--text-dim); font-size:9px; font-weight:700;
+  letter-spacing:.06em; cursor:pointer; font-family:var(--mono); transition:all .2s;
+  display:flex; align-items:center; justify-content:center;
+}
+.btn-auto.on { border-color:var(--green); color:var(--green); background:rgba(0,229,160,.07); }
+.btn-discord-all {
+  width:38px; height:38px; border-radius:50%;
+  border:1px solid rgba(88,101,242,.3); background:rgba(88,101,242,.07);
+  color:#9ea6f5; cursor:pointer; transition:all .2s;
+  display:flex; align-items:center; justify-content:center;
+}
+.btn-discord-all:hover { background:var(--discord); border-color:var(--discord); color:white; box-shadow:0 0 14px var(--discord-glow); }
+
+/* ── TOAST ── */
+.toast {
+  position:fixed; bottom:90px; left:50%; transform:translateX(-50%) translateY(8px);
+  background:var(--surface); border:1px solid var(--border); border-radius:10px;
+  padding:7px 16px; font-size:11px; font-family:var(--mono); color:var(--text);
+  opacity:0; transition:all .2s; z-index:999; pointer-events:none; white-space:nowrap;
+}
+.toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+.toast.ok  { border-color:rgba(0,229,160,.4); color:var(--green); }
+.toast.err { border-color:rgba(255,107,53,.4); color:var(--accent2); }
+.toast.disc{ border-color:rgba(88,101,242,.4); color:#9ea6f5; }
+
+.http-warn {
+  font-size:10px; color:#fbbf24; font-family:var(--mono); line-height:1.5;
+  padding:8px 10px; background:rgba(251,191,36,.05); border:1px solid rgba(251,191,36,.3);
+  border-radius:8px; display:none;
+}
+.http-warn strong { color:#fbbf24; }
+.http-warn a { color:#fbbf24; text-decoration:underline; }
+.no-support {
+  background:rgba(255,107,53,.07); border:1px solid rgba(255,107,53,.3); border-radius:8px;
+  padding:8px 12px; font-size:11px; color:var(--accent2); text-align:center; margin-bottom:12px;
+}
+</style>
+</head>
+<body>
+
+<!-- ── PERMISSION OVERLAY ── -->
+<div class="perm-overlay" id="permOverlay">
+  <div class="perm-icon">🎤</div>
+  <div class="perm-title">마이크 권한 요청 중...</div>
+  <div class="perm-sub">브라우저 팝업에서 <strong style="color:var(--green)">허용</strong>을 클릭해주세요.<br>한 번만 허용하면 다음부터는 묻지 않습니다.</div>
+  <div class="perm-spinner"></div>
+</div>
+
+<!-- ── SETUP PANEL ── -->
+<div class="setup-panel" id="setupPanel">
+  <div class="setup-card">
+    <div class="setup-logo">🎤</div>
+    <h2>음성 → Discord</h2>
+    <p class="sub">이름과 Webhook URL을 입력하면 바로 시작할 수 있습니다.</p>
+
+    <hr class="divider">
+
+    <!-- 이름 -->
+    <div class="field">
+      <label>내 이름</label>
+      <input class="inp" id="inputName" placeholder="예: 홍길동" maxlength="20" />
+    </div>
+
+    <!-- 웹훅 -->
+    <div class="field">
+      <label>Discord Webhook URL</label>
+      <input class="inp mono" id="inputWebhook" placeholder="https://discord.com/api/webhooks/..." />
+    </div>
+
+    <!-- 마이크 권한 안내 -->
+    <div class="mic-notice">
+      <span class="icon">🔒</span>
+      <span><strong>마이크 권한</strong> 안내: 시작 버튼을 누르면 마이크 접근 허용을 요청합니다. <strong>한 번만</strong> 허용하면 이후엔 팝업이 뜨지 않습니다.</span>
+    </div>
+
+    <!-- 저장된 웹훅 -->
+    <div class="saved-section">
+      <div class="saved-section-label">저장된 Webhook</div>
+      <div id="savedChips"><span class="no-saved-txt">없음</span></div>
+    </div>
+
+    <!-- HTTP 경고 -->
+    <div class="http-warn" id="httpWarn">
+      ⚠️ 현재 <strong>http://</strong> 접속 중입니다.<br>
+      마이크 권한이 저장되지 않아 매번 팝업이 뜹니다.<br>
+      <a id="httpsLink" href="#">👉 https://로 다시 접속하기</a>
+    </div>
+
+    <hr class="divider">
+    <button class="btn-start" id="btnStart" onclick="startApp()">
+      <span id="btnStartTxt">🎤 시작하기 →</span>
+    </button>
+  </div>
+</div>
+
+<!-- ── HEADER ── -->
+<header>
+  <div class="logo">🎤</div>
+  <div class="title-group">
+    <h1>VOICE · DISCORD</h1>
+    <p>멀티유저 음성 채팅</p>
+  </div>
+  <div class="header-right">
+    <div class="status-pill">
+      <div class="sdot" id="sdot"></div>
+      <span id="stext">대기</span>
+    </div>
+  </div>
+</header>
+
+<!-- ── TOOLBAR ── -->
+<div class="toolbar">
+  <div class="user-badge" id="userBadge">
+    <div class="user-avatar" id="userAvatar">?</div>
+    <span id="userNameLabel">-</span>
+  </div>
+  <button class="btn-settings" onclick="openSettings()">⚙️ 설정 변경</button>
+</div>
+
+<!-- ── CHAT ── -->
+<div class="chat-container" id="chatContainer">
+  <div class="empty-state" id="emptyState">
+    <div class="empty-icon">🎙️</div>
+    <p>마이크 버튼을 눌러 말씀하세요<br>
+    <span style="font-size:10px;opacity:.5">[이름] 메시지 형식으로 Discord에 전송됩니다</span></p>
+  </div>
+</div>
+
+<!-- ── MIC SECTION ── -->
+<div class="mic-section">
+  <div id="noSupportMsg" class="no-support" style="display:none">⚠️ Chrome 또는 Edge를 사용해주세요.</div>
+  <div class="transcript-box" id="transcriptBox">
+    <div class="waveform" id="waveform">
+      <div class="wbar"></div><div class="wbar"></div><div class="wbar"></div>
+      <div class="wbar"></div><div class="wbar"></div><div class="wbar"></div>
+    </div>
+    <span class="transcript-txt" id="transcriptTxt">실시간 음성 미리보기...</span>
+  </div>
+  <div class="controls">
+    <button class="btn-sm" onclick="clearChat()" title="대화 지우기">🗑️</button>
+    <button class="btn-sm" id="btnCopyAll" title="전체 복사">📋</button>
+    <button class="btn-mic" id="btnMic">🎤</button>
+    <button class="btn-discord-all" id="btnSendAll" title="전체 Discord 전송">
+      <svg width="16" height="13" viewBox="0 0 71 55" fill="currentColor">
+        <path d="M60.1 4.9A58.55 58.55 0 0 0 45.2.2a.22.22 0 0 0-.23.11 40.78 40.78 0 0 0-1.8 3.7 54.07 54.07 0 0 0-16.24 0A37.42 37.42 0 0 0 25.08.31a.23.23 0 0 0-.23-.11A58.37 58.37 0 0 0 10 4.9a.21.21 0 0 0-.09.08C1.58 16.46-.97 27.72.31 38.83a.24.24 0 0 0 .09.17 58.82 58.82 0 0 0 17.7 8.95.23.23 0 0 0 .25-.08 42.08 42.08 0 0 0 3.62-5.89.22.22 0 0 0-.12-.31 38.75 38.75 0 0 1-5.53-2.63.23.23 0 0 1-.02-.37 30.85 30.85 0 0 0 1.1-.86.22.22 0 0 1 .23-.03c11.59 5.3 24.15 5.3 35.61 0a.22.22 0 0 1 .23.03c.36.29.73.58 1.1.86a.23.23 0 0 1-.02.38 36.37 36.37 0 0 1-5.54 2.62.23.23 0 0 0-.12.31 47.24 47.24 0 0 0 3.62 5.89c.06.09.17.13.26.09a58.62 58.62 0 0 0 17.73-8.95.24.24 0 0 0 .09-.17c1.47-15.2-2.47-28.38-10.44-40.1a.18.18 0 0 0-.09-.07zM23.7 31.5c-3.5 0-6.39-3.21-6.39-7.16s2.83-7.16 6.39-7.16c3.59 0 6.44 3.24 6.39 7.16 0 3.95-2.84 7.16-6.39 7.16zm23.62 0c-3.5 0-6.39-3.21-6.39-7.16s2.83-7.16 6.39-7.16c3.59 0 6.44 3.24 6.39 7.16 0 3.95-2.8 7.16-6.39 7.16z"/>
+      </svg>
+    </button>
+    <button class="btn-auto" id="btnAuto">AUTO</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ── HTTPS 강제 리다이렉트 ── */
+(function() {
+  const loc = window.location;
+  if (loc.protocol === 'http:' && loc.hostname !== 'localhost' && loc.hostname !== '127.0.0.1') {
+    loc.replace('https://' + loc.host + loc.pathname + loc.search + loc.hash);
+  }
+  // 리다이렉트 실패했거나 여전히 http면 경고 표시
+  if (loc.protocol === 'http:' && loc.hostname !== 'localhost' && loc.hostname !== '127.0.0.1') {
+    window.addEventListener('DOMContentLoaded', () => {
+      const warn = document.getElementById('httpWarn');
+      const link = document.getElementById('httpsLink');
+      if (warn) warn.style.display = 'block';
+      if (link) link.href = 'https://' + loc.host + loc.pathname + loc.search + loc.hash;
+    });
+  }
+})();
+
+/* ── State ── */
+let userName   = '';
+let userColor  = '#00c2ff';
+let webhookUrl = '';
+let autoSend   = false;
+let messages   = [];
+let recognition = null;
+let isListening = false;
+let toastTimer  = null;
+let micStream   = null; // 🔑 미리 획득한 마이크 스트림
+
+const COLORS = ['#00c2ff','#ff6b35','#00e5a0','#ff6b9d','#c4b5fd','#fbbf24','#34d399','#f87171'];
+const STORAGE_KEY = 'vd_webhooks';
+
+/* ── DOM ── */
+const setupPanel    = document.getElementById('setupPanel');
+const permOverlay   = document.getElementById('permOverlay');
+const chatContainer = document.getElementById('chatContainer');
+const transcriptTxt = document.getElementById('transcriptTxt');
+const transcriptBox = document.getElementById('transcriptBox');
+const waveform      = document.getElementById('waveform');
+const sdot          = document.getElementById('sdot');
+const stext         = document.getElementById('stext');
+const btnMic        = document.getElementById('btnMic');
+const btnAuto       = document.getElementById('btnAuto');
+const btnCopyAll    = document.getElementById('btnCopyAll');
+const btnSendAll    = document.getElementById('btnSendAll');
+const toastEl       = document.getElementById('toast');
+const userAvatar    = document.getElementById('userAvatar');
+const userNameLabel = document.getElementById('userNameLabel');
+const inputName     = document.getElementById('inputName');
+const inputWebhook  = document.getElementById('inputWebhook');
+const btnStart      = document.getElementById('btnStart');
+const btnStartTxt   = document.getElementById('btnStartTxt');
+
+/* ── Toast ── */
+function showToast(msg, type='', dur=2200) {
+  clearTimeout(toastTimer);
+  toastEl.textContent = msg;
+  toastEl.className = `toast ${type} show`;
+  toastTimer = setTimeout(() => { toastEl.className = 'toast'; }, dur);
+}
+
+/* ── Saved Webhooks ── */
+function loadSaved() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; } catch(_){ return []; }
+}
+function saveSaved(list) { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); }
+
+function renderSavedChips() {
+  const list = loadSaved();
+  const el = document.getElementById('savedChips');
+  if (!list.length) { el.innerHTML = '<span class="no-saved-txt">없음</span>'; return; }
+  el.innerHTML = '';
+  list.forEach((item, i) => {
+    const chip = document.createElement('div');
+    chip.className = 'saved-chips-row';
+    chip.style.marginBottom = '4px';
+    chip.innerHTML = `
+      <div class="s-chip">
+        <span class="s-chip-name">${escHtml(item.name)}</span>
+        <button class="s-chip-del" title="삭제">✕</button>
+      </div>`;
+    chip.querySelector('.s-chip-name').addEventListener('click', () => {
+      inputWebhook.value = item.url;
+      if (item.userName) inputName.value = item.userName;
+      validateWebhookInput();
+      showToast(`🔗 "${item.name}" 불러옴 (이름: ${item.userName || '미저장'})`, 'ok', 1800);
+    });
+    chip.querySelector('.s-chip-del').addEventListener('click', () => {
+      const updated = loadSaved().filter((_,j)=>j!==i);
+      saveSaved(updated);
+      renderSavedChips();
+    });
+    el.appendChild(chip);
+  });
+}
+renderSavedChips();
+
+/* ── Webhook validation ── */
+function validateWebhookInput() {
+  let v = inputWebhook.value.trim();
+  if (v.startsWith('{')) {
+    try { const j = JSON.parse(v); if (j.url) { v = j.url; inputWebhook.value = v; } } catch(_){}
+  }
+  const ok = v.startsWith('https://discord.com/api/webhooks/') || v.startsWith('https://discordapp.com/api/webhooks/');
+  inputWebhook.classList.toggle('valid', ok);
+  inputWebhook.classList.toggle('err', !ok && v.length > 0);
+  return ok ? v : '';
+}
+inputWebhook.addEventListener('input', validateWebhookInput);
+inputWebhook.addEventListener('paste', () => setTimeout(validateWebhookInput, 50));
+
+/* ── 🔑 핵심: 마이크 권한 미리 요청 ── */
+async function requestMicPermission() {
+  // 이미 권한 있으면 스킵
+  if (micStream) return true;
+
+  permOverlay.classList.add('show');
+  try {
+    // getUserMedia로 마이크 스트림 획득 → 브라우저가 권한 기억함
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    permOverlay.classList.remove('show');
+    return true;
+  } catch(e) {
+    permOverlay.classList.remove('show');
+    const msg = e.name === 'NotAllowedError'
+      ? '마이크 접근이 거부되었습니다. 브라우저 주소창 🔒 아이콘에서 권한을 허용해주세요.'
+      : `마이크 오류: ${e.message}`;
+    showToast('❌ ' + msg, 'err', 5000);
+    return false;
+  }
+}
+
+/* ── Start ── */
+async function startApp() {
+  const name = inputName.value.trim();
+  const url  = validateWebhookInput();
+  if (!name) { showToast('이름을 입력해주세요', 'err'); inputName.focus(); return; }
+  if (!url)  { showToast('올바른 Webhook URL을 입력해주세요', 'err'); inputWebhook.focus(); return; }
+
+  // 버튼 로딩 상태
+  btnStart.disabled = true;
+  btnStartTxt.textContent = '⏳ 마이크 권한 요청 중...';
+
+  // 마이크 권한 미리 획득
+  const ok = await requestMicPermission();
+  if (!ok) {
+    btnStart.disabled = false;
+    btnStartTxt.textContent = '🎤 시작하기 →';
+    return;
+  }
+
+  userName   = name;
+  webhookUrl = url;
+
+  // color by name
+  let h = 0; for (const c of userName) h = (h*31 + c.charCodeAt(0)) % COLORS.length;
+  userColor = COLORS[h];
+
+  // auto-save webhook if new
+  const list = loadSaved();
+  if (!list.find(s => s.url === url)) {
+    const saveName = prompt(`이 Webhook URL을 저장할까요?\n이름을 입력하세요 (취소하면 저장 안 함):`, '');
+    if (saveName && saveName.trim()) {
+      list.unshift({ name: saveName.trim(), url, userName: name });
+      if (list.length > 10) list.length = 10;
+      saveSaved(list);
+    }
+  }
+
+  setupPanel.style.display = 'none';
+  btnStart.disabled = false;
+  btnStartTxt.textContent = '🎤 시작하기 →';
+  applyUserUI();
+  initSpeech();
+  showToast(`👋 ${userName} 으로 시작합니다`, 'ok');
+}
+
+function applyUserUI() {
+  userAvatar.textContent = userName[0] || '?';
+  userAvatar.style.background = userColor;
+  userNameLabel.textContent = userName;
+  document.getElementById('userBadge').style.borderColor = userColor + '44';
+}
+
+function openSettings() {
+  inputName.value    = userName;
+  inputWebhook.value = webhookUrl;
+  validateWebhookInput();
+  renderSavedChips();
+  setupPanel.style.display = 'flex';
+}
+
+/* ── Discord send ── */
+async function sendToDiscord(text, btnEl) {
+  if (!webhookUrl) { showToast('Webhook URL 없음', 'err'); return false; }
+  if (btnEl) { btnEl.classList.add('sending'); btnEl.disabled = true; }
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: `[${userName}] ${text}`, allowed_mentions: { parse: [] } })
+    });
+    if (res.ok) {
+      if (btnEl) { btnEl.classList.remove('sending'); btnEl.classList.add('sent'); btnEl.textContent = '✓'; }
+      return true;
+    }
+    throw new Error(`HTTP ${res.status}`);
+  } catch(e) {
+    if (btnEl) { btnEl.classList.remove('sending'); btnEl.disabled = false; }
+    showToast(`전송 실패: ${e.message}`, 'err');
+    return false;
+  }
+}
+
+/* ── Speech Recognition ── */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+function initSpeech() {
+  if (!SR) { document.getElementById('noSupportMsg').style.display = 'block'; btnMic.disabled = true; btnMic.style.opacity = '.4'; return; }
+  sdot.classList.add('ready'); stext.textContent = '준비됨';
+  recognition = new SR();
+  recognition.lang = 'ko-KR'; recognition.continuous = true; recognition.interimResults = true;
+
+  recognition.onstart = () => {
+    isListening = true; btnMic.classList.add('on'); btnMic.textContent = '⏹️';
+    transcriptBox.classList.add('active'); waveform.classList.add('active');
+    sdot.classList.remove('ready'); sdot.classList.add('on');
+    stext.textContent = '인식 중...'; transcriptTxt.textContent = '듣고 있습니다...';
+  };
+  recognition.onresult = (e) => {
+    let interim = '', final = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) final += t; else interim += t;
+    }
+    if (interim) transcriptTxt.textContent = interim;
+    if (final.trim()) { addMessage(final.trim()); transcriptTxt.textContent = '듣고 있습니다...'; }
+  };
+  recognition.onerror = (e) => {
+    const m = { 'not-allowed':'마이크 접근 거부', 'no-speech':'음성 미감지', 'network':'네트워크 오류' };
+    addSysMsg('⚠️ ' + (m[e.error] || '오류')); stopListening();
+  };
+  recognition.onend = () => { if (isListening) { try { recognition.start(); } catch(_){} } else stopListening(); };
+}
+
+function stopListening() {
+  isListening = false; btnMic.classList.remove('on'); btnMic.textContent = '🎤';
+  transcriptBox.classList.remove('active'); waveform.classList.remove('active');
+  sdot.classList.remove('on'); sdot.classList.add('ready');
+  stext.textContent = '준비됨'; transcriptTxt.textContent = '실시간 음성 미리보기...';
+}
+
+btnMic.addEventListener('click', () => {
+  if (!recognition) { showToast('먼저 시작하기를 눌러주세요', 'err'); return; }
+  if (isListening) { isListening = false; recognition.stop(); } else recognition.start();
+});
+
+/* ── Add message ── */
+async function addMessage(text) {
+  const time = new Date().toLocaleTimeString('ko-KR', { hour:'2-digit', minute:'2-digit' });
+  messages.push({ text, time, name: userName });
+  const emptyEl = document.getElementById('emptyState');
+  if (emptyEl) emptyEl.remove();
+
+  const div = document.createElement('div');
+  div.className = 'message mine';
+  div.innerHTML = `
+    <div class="msg-header">
+      <span class="msg-name" style="color:${userColor}">${escHtml(userName)}</span>
+      <span>${time}</span>
+    </div>
+    <div class="bubble">${escHtml(text)}</div>
+    <div class="msg-actions">
+      <button class="act-btn act-copy">📋 복사</button>
+      <button class="act-btn act-send">
+        <svg width="10" height="8" viewBox="0 0 71 55" fill="currentColor"><path d="M60.1 4.9A58.55 58.55 0 0 0 45.2.2a.22.22 0 0 0-.23.11 40.78 40.78 0 0 0-1.8 3.7 54.07 54.07 0 0 0-16.24 0A37.42 37.42 0 0 0 25.08.31a.23.23 0 0 0-.23-.11A58.37 58.37 0 0 0 10 4.9a.21.21 0 0 0-.09.08C1.58 16.46-.97 27.72.31 38.83a.24.24 0 0 0 .09.17 58.82 58.82 0 0 0 17.7 8.95.23.23 0 0 0 .25-.08 42.08 42.08 0 0 0 3.62-5.89.22.22 0 0 0-.12-.31 38.75 38.75 0 0 1-5.53-2.63.23.23 0 0 1-.02-.37 30.85 30.85 0 0 0 1.1-.86.22.22 0 0 1 .23-.03c11.59 5.3 24.15 5.3 35.61 0a.22.22 0 0 1 .23.03c.36.29.73.58 1.1.86a.23.23 0 0 1-.02.38 36.37 36.37 0 0 1-5.54 2.62.23.23 0 0 0-.12.31 47.24 47.24 0 0 0 3.62 5.89c.06.09.17.13.26.09a58.62 58.62 0 0 0 17.73-8.95.24.24 0 0 0 .09-.17c1.47-15.2-2.47-28.38-10.44-40.1a.18.18 0 0 0-.09-.07zM23.7 31.5c-3.5 0-6.39-3.21-6.39-7.16s2.83-7.16 6.39-7.16c3.59 0 6.44 3.24 6.39 7.16 0 3.95-2.84 7.16-6.39 7.16zm23.62 0c-3.5 0-6.39-3.21-6.39-7.16s2.83-7.16 6.39-7.16c3.59 0 6.44 3.24 6.39 7.16 0 3.95-2.8 7.16-6.39 7.16z"/></svg>
+        전송
+      </button>
+    </div>`;
+
+  div.querySelector('.act-copy').addEventListener('click', function() {
+    navigator.clipboard.writeText(text).then(() => {
+      this.textContent = '✓ 복사됨';
+      setTimeout(() => { this.innerHTML = '📋 복사'; }, 1400);
+    });
+  });
+  div.querySelector('.act-send').addEventListener('click', async function() {
+    const ok = await sendToDiscord(text, this);
+    if (ok) showToast('✅ Discord 전송 완료!', 'ok');
+  });
+
+  chatContainer.appendChild(div);
+  chatContainer.scrollTop = chatContainer.scrollHeight;
+
+  if (autoSend && webhookUrl) {
+    await sendToDiscord(text, null);
+    showToast(`🤖 [${userName}] 자동 전송됨`, 'disc');
+  }
+}
+
+function addSysMsg(text) {
+  const d = document.createElement('div');
+  d.className = 'message sys-msg';
+  d.innerHTML = `<div class="bubble">${text}</div>`;
+  chatContainer.appendChild(d);
+  chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function clearChat() {
+  messages = [];
+  chatContainer.innerHTML = `<div class="empty-state" id="emptyState"><div class="empty-icon">🎙️</div><p>마이크 버튼을 눌러 말씀하세요<br><span style="font-size:10px;opacity:.5">[이름] 메시지 형식으로 Discord에 전송됩니다</span></p></div>`;
+}
+
+btnCopyAll.addEventListener('click', () => {
+  if (!messages.length) { showToast('복사할 메시지 없음', 'err'); return; }
+  navigator.clipboard.writeText(messages.map(m => `[${m.name}] ${m.text}`).join('\n')).then(() => {
+    btnCopyAll.textContent = '✅';
+    showToast('📋 전체 복사됨', 'ok');
+    setTimeout(() => { btnCopyAll.textContent = '📋'; }, 1500);
+  });
+});
+
+btnSendAll.addEventListener('click', async () => {
+  if (!messages.length) { showToast('전송할 메시지 없음', 'err'); return; }
+  if (!webhookUrl) { showToast('Webhook URL 없음', 'err'); return; }
+  const lines = messages.map(m => `[${m.name}] ${m.text}`).join('\n');
+  const chunks = [];
+  for (let i = 0; i < lines.length; i += 1990) chunks.push(lines.slice(i, i + 1990));
+  showToast(`📤 전송 중 (${chunks.length}파트)...`, 'disc', 3000);
+  for (const c of chunks) {
+    const res = await fetch(webhookUrl, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: c, allowed_mentions: { parse: [] } })
+    });
+    if (!res.ok) { showToast('전송 실패', 'err'); return; }
+    await new Promise(r => setTimeout(r, 400));
+  }
+  showToast('✅ 전체 전송 완료!', 'ok');
+});
+
+btnAuto.addEventListener('click', () => {
+  autoSend = !autoSend;
+  btnAuto.className = autoSend ? 'btn-auto on' : 'btn-auto';
+  showToast(autoSend ? `🤖 자동 전송 ON` : '자동 전송 OFF', autoSend ? 'ok' : '', 2000);
+});
+</script>
+</body>
+</html>
