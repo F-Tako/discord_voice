@@ -564,7 +564,7 @@ async function startApp() {
     return;
   }
 
-  userName   = name || '익명';
+  userName   = name;
   webhookUrl = url;
 
   // color by name
@@ -613,7 +613,7 @@ async function sendToDiscord(text, btnEl) {
     const res = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: `[${userName}] ${text}`, allowed_mentions: { parse: [] } })
+      body: JSON.stringify({ content: userName ? `[${userName}] ${text}` : text, allowed_mentions: { parse: [] } })
     });
     if (res.ok) {
       if (btnEl) { btnEl.classList.remove('sending'); btnEl.classList.add('sent'); btnEl.textContent = '✓'; }
@@ -651,7 +651,8 @@ function initSpeech() {
     if (final.trim()) { addMessage(final.trim()); transcriptTxt.textContent = '듣고 있습니다...'; }
   };
   recognition.onerror = (e) => {
-    const m = { 'not-allowed':'마이크 접근 거부', 'no-speech':'음성 미감지', 'network':'네트워크 오류' };
+    if (e.error === 'no-speech') return; // 무음이면 그냥 계속
+    const m = { 'not-allowed':'마이크 접근 거부', 'network':'네트워크 오류' };
     addSysMsg('⚠️ ' + (m[e.error] || '오류')); stopListening();
   };
   recognition.onend = () => { if (isListening) { try { recognition.start(); } catch(_){} } else stopListening(); };
@@ -729,7 +730,7 @@ function clearChat() {
 
 btnCopyAll.addEventListener('click', () => {
   if (!messages.length) { showToast('복사할 메시지 없음', 'err'); return; }
-  navigator.clipboard.writeText(messages.map(m => `[${m.name}] ${m.text}`).join('\n')).then(() => {
+  navigator.clipboard.writeText(messages.map(m => m.name ? `[${m.name}] ${m.text}` : m.text).join('\n')).then(() => {
     btnCopyAll.textContent = '✅';
     showToast('📋 전체 복사됨', 'ok');
     setTimeout(() => { btnCopyAll.textContent = '📋'; }, 1500);
@@ -739,7 +740,7 @@ btnCopyAll.addEventListener('click', () => {
 btnSendAll.addEventListener('click', async () => {
   if (!messages.length) { showToast('전송할 메시지 없음', 'err'); return; }
   if (!webhookUrl) { showToast('Webhook URL 없음', 'err'); return; }
-  const lines = messages.map(m => `[${m.name}] ${m.text}`).join('\n');
+  const lines = messages.map(m => m.name ? `[${m.name}] ${m.text}` : m.text).join('\n');
   const chunks = [];
   for (let i = 0; i < lines.length; i += 1990) chunks.push(lines.slice(i, i + 1990));
   showToast(`📤 전송 중 (${chunks.length}파트)...`, 'disc', 3000);
